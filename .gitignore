@@ -1,7 +1,21 @@
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Virtual environments
 .venv/
 venv/
+env/
+
+# Environment / secrets
 .env
+
+# VS Code
 .vscode/
+
+# Project-specific
 ai/
+
+# OS
+.DS_Store
+Thumbs.db
