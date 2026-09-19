@@ -1,46 +1,19 @@
 import socket
 import json
+import threading
+
 import pygame
 
 
-# --------------------------------------------------
-# Einstellungen
-# --------------------------------------------------
-
-SERVER_IP = input("Input server IP: ")
-SERVER_PORT = 5000
+HOST = input("Server-IP: ")
+PORT = XXXX  # Port number
 
 WIDTH = 1000
 HEIGHT = 600
 
-FPS = 60
-
 
 # --------------------------------------------------
-# Pygame
-# --------------------------------------------------
-
-pygame.init()
-
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Pong IoT Secure")
-
-clock = pygame.time.Clock()
-
-
-# --------------------------------------------------
-# Farben
-# --------------------------------------------------
-
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-
-RED = (255, 0, 0)
-GREEN = (0, 255, 0)
-
-
-# --------------------------------------------------
-# Netzwerk
+# SOCKET
 # --------------------------------------------------
 
 client = socket.socket(
@@ -49,149 +22,186 @@ client = socket.socket(
 )
 
 client.connect(
-    (SERVER_IP, SERVER_PORT)
+    (HOST, PORT)
 )
 
 print("Mit Server verbunden.")
 
 
 # --------------------------------------------------
-# Server-Nachrichten
+# GAME STATE
 # --------------------------------------------------
 
-buffer = ""
-
-player_number = None
-
-game_state = {
-    "player1_y": 250,
-    "player2_y": 250,
-
-    "ball_x": 490,
-    "ball_y": 290,
-
+state = {
+    "player1_y": HEIGHT / 2 - 50,
+    "player2_y": HEIGHT / 2 - 50,
+    "ball_x": WIDTH / 2,
+    "ball_y": HEIGHT / 2,
     "score1": 0,
     "score2": 0,
-
-    "last_point": None,
-
-    "serving_player": None,
-
-    "ball_started": False,
-
-    "game_state": "WAITING"
+    "last_point": None
 }
 
+state_lock = threading.Lock()
 
-def receive_messages():
-
-    global buffer
-    global player_number
-    global game_state
-
-    client.setblocking(False)
-
-    try:
-
-        data = client.recv(4096)
-
-        if not data:
-            return
-
-        buffer += data.decode(
-            errors="replace"
-        )
-
-        while "\n" in buffer:
-
-            line, buffer = buffer.split(
-                "\n",
-                1
-            )
-
-            if not line:
-                continue
-
-            try:
-
-                message = json.loads(line)
-
-            except json.JSONDecodeError:
-
-                print("Ungültiges JSON vom Server.")
-
-                continue
-
-
-            # --------------------------------------
-            # PLAYER ASSIGNED
-            # --------------------------------------
-
-            if message.get("type") == "player_assigned":
-
-                player_number = message["player"]
-
-                print(
-                    f"Du bist Spieler {player_number}"
-                )
-
-
-            # --------------------------------------
-            # GAME STATE
-            # --------------------------------------
-
-            elif message.get("type") == "state":
-
-                game_state = message
-
-    except BlockingIOError:
-
-        pass
-
-    except ConnectionError:
-
-        print("Verbindung zum Server verloren.")
-
-
-def send_input(direction):
-
-    message = {
-        "type": "input",
-        "direction": direction
-    }
-
-    data = json.dumps(message) + "\n"
-
-    try:
-
-        client.sendall(
-            data.encode()
-        )
-
-    except ConnectionError:
-
-        pass
-
-
-# --------------------------------------------------
-# Spiel
-# --------------------------------------------------
+my_player = None
+rps_active = False
 
 running = True
 
 
+# --------------------------------------------------
+# RECEIVE THREAD
+# --------------------------------------------------
+
+def receive_data():
+    global running
+    global my_player
+
+    buffer = ""
+
+    try:
+
+        while running:
+
+            data = client.recv(4096)
+
+            if not data:
+
+                print(
+                    "Server hat die Verbindung beendet."
+                )
+
+                running = False
+
+                break
+
+            buffer += data.decode(
+                errors="replace"
+            )
+
+            while "\n" in buffer:
+
+                line, buffer = buffer.split(
+                    "\n",
+                    1
+                )
+
+                if not line:
+                    continue
+
+                try:
+
+                    message = json.loads(line)
+
+                except json.JSONDecodeError:
+
+                    print(
+                        "Ungültige Server-Nachricht."
+                    )
+
+                    continue
+
+
+                # ------------------------------
+                # WELCOME
+                # ------------------------------
+
+                if message.get(
+                    "type"
+                ) == "welcome":
+
+                    my_player = message.get(
+                        "player"
+                    )
+
+                    print(
+                        f"Du bist Player "
+                        f"{my_player}"
+                    )
+
+
+                # ------------------------------
+                # GAME STATE
+                # ------------------------------
+
+                elif message.get(
+                    "type"
+                ) == "state":
+
+                    with state_lock:
+
+                        state.update(
+                            message
+                        )
+
+
+                # ------------------------------
+                # ERROR
+                # ------------------------------
+
+                elif message.get(
+                    "type"
+                ) == "error":
+
+                    print(
+                        message.get(
+                            "message"
+                        )
+                    )
+
+                    running = False
+
+                    break
+
+    except ConnectionError:
+
+        running = False
+
+
+# --------------------------------------------------
+# RECEIVE THREAD START
+# --------------------------------------------------
+
+receive_thread = threading.Thread(
+    target=receive_data,
+    daemon=True
+)
+
+receive_thread.start()
+
+
+# --------------------------------------------------
+# PYGAME
+# --------------------------------------------------
+
+pygame.init()
+
+screen = pygame.display.set_mode(
+    (WIDTH, HEIGHT)
+)
+
+pygame.display.set_caption(
+    "Pong IoT Secure"
+)
+
+clock = pygame.time.Clock()
+
+font = pygame.font.Font(
+    None,
+    60
+)
+
+
+# --------------------------------------------------
+# MAIN CLIENT LOOP
+# --------------------------------------------------
+
 while running:
 
-    # ------------------------------------------------
-    # Netzwerk
-    # ------------------------------------------------
-
-    receive_messages()
-
-
-    # ------------------------------------------------
-    # Events
-    # ------------------------------------------------
+    # ----------------------------------------------
+    # EVENTS
+    # ----------------------------------------------
 
     for event in pygame.event.get():
 
@@ -200,292 +210,213 @@ while running:
             running = False
 
 
-        # --------------------------------------------
-        # SPACE
-        # --------------------------------------------
-
-        if event.type == pygame.KEYDOWN:
-
-            if event.key == pygame.K_SPACE:
-
-                # Jeder Spieler darf SPACE drücken.
-                #
-                # Der Server entscheidet,
-                # ob dieser Spieler gerade
-                # aufschlagen darf.
-
-                send_input("start")
-
-
-    # ------------------------------------------------
-    # Tastatur
-    # ------------------------------------------------
+    # ----------------------------------------------
+    # KEYBOARD
+    # ----------------------------------------------
 
     keys = pygame.key.get_pressed()
 
-    direction = "none"
+    input_direction = "none"
 
 
-    # Spieler 1
-    if player_number == 1:
+    if keys[pygame.K_w]:
 
-        if keys[pygame.K_w]:
+        input_direction = "up"
 
-            direction = "up"
+    elif keys[pygame.K_s]:
 
-        elif keys[pygame.K_s]:
-
-            direction = "down"
+        input_direction = "down"
 
 
-    # Spieler 2
-    elif player_number == 2:
+    # ----------------------------------------------
+    # SEND INPUT
+    # ----------------------------------------------
 
-        if keys[pygame.K_UP]:
+    message = {
+        "type": "input",
+        "direction": input_direction
+    }
 
-            direction = "up"
+    try:
 
-        elif keys[pygame.K_DOWN]:
+        data = json.dumps(message) + "\n"
 
-            direction = "down"
+        client.sendall(
+            data.encode()
+        )
 
+    except ConnectionError:
 
-    send_input(direction)
+        running = False
 
-
-    # ------------------------------------------------
-    # Bildschirm
-    # ------------------------------------------------
-
-    screen.fill(BLACK)
+        break
 
 
-    # ------------------------------------------------
-    # Mittellinie
-    # ------------------------------------------------
+    # ----------------------------------------------
+    # COPY STATE
+    # ----------------------------------------------
 
-    pygame.draw.line(
-        screen,
-        WHITE,
-        (WIDTH // 2, 0),
-        (WIDTH // 2, HEIGHT),
-        2
+    with state_lock:
+
+        current_state = state.copy()
+
+    # ----------------------------------------------
+    # DRAW
+    # ----------------------------------------------
+
+    screen.fill(
+        "black"
     )
 
 
-    # ------------------------------------------------
-    # Spieler 1
-    # ------------------------------------------------
-
-    player1_y = game_state["player1_y"]
+    # Player 1 paddle - RED
 
     pygame.draw.rect(
         screen,
-        RED,
+        "red",
         (
             50,
-            int(player1_y),
+            int(
+                current_state[
+                    "player1_y"
+                ]
+            ),
             20,
             100
         )
     )
 
 
-    # ------------------------------------------------
-    # Spieler 2
-    # ------------------------------------------------
-
-    player2_y = game_state["player2_y"]
+    # Player 2 paddle - GREEN
 
     pygame.draw.rect(
         screen,
-        GREEN,
+        "green",
         (
             WIDTH - 70,
-            int(player2_y),
+            int(
+                current_state[
+                    "player2_y"
+                ]
+            ),
             20,
             100
         )
     )
 
 
-    # ------------------------------------------------
     # Ball
-    # ------------------------------------------------
-
-    ball_x = game_state["ball_x"]
-    ball_y = game_state["ball_y"]
 
     pygame.draw.rect(
         screen,
-        WHITE,
+        "white",
         (
-            int(ball_x),
-            int(ball_y),
+            int(
+                current_state[
+                    "ball_x"
+                ]
+            ),
+            int(
+                current_state[
+                    "ball_y"
+                ]
+            ),
             20,
             20
         )
     )
 
 
-    # ------------------------------------------------
-    # Score
-    # ------------------------------------------------
+    # ----------------------------------------------
+    # SCORE
+    # ----------------------------------------------
 
-    font = pygame.font.Font(
-        None,
-        60
-    )
-
-    score1 = font.render(
-        str(game_state["score1"]),
+    score_text = font.render(
+        f"{current_state['score1']}   "
+        f"{current_state['score2']}",
         True,
-        WHITE
+        "white"
     )
 
-    score2 = font.render(
-        str(game_state["score2"]),
-        True,
-        WHITE
-    )
-
-
-    screen.blit(
-        score1,
-        (
-            WIDTH // 2 - 80,
-            30
+    score_rect = score_text.get_rect(
+        center=(
+            WIDTH // 2,
+            50
         )
     )
 
     screen.blit(
-        score2,
-        (
-            WIDTH // 2 + 50,
-            30
+        score_text,
+        score_rect
+    )
+
+
+    # ----------------------------------------------
+    # PLAYER INDICATOR
+    # ----------------------------------------------
+
+    if my_player == 1:
+
+        player_text = font.render(
+            "PLAYER 1",
+            True,
+            "red"
+        )
+
+    elif my_player == 2:
+
+        player_text = font.render(
+            "PLAYER 2",
+            True,
+            "green"
+        )
+
+    else:
+
+        player_text = font.render(
+            "CONNECTING...",
+            True,
+            "white"
+        )
+
+
+    player_rect = player_text.get_rect(
+        center=(
+            WIDTH // 2,
+            HEIGHT - 30
         )
     )
 
-
-    # ------------------------------------------------
-    # Spieler-Anzeige
-    # ------------------------------------------------
-
-    small_font = pygame.font.Font(
-        None,
-        30
-    )
-
-    player_text = small_font.render(
-        f"Spieler {player_number}",
-        True,
-        WHITE
-    )
+    # kleine Schrift wäre schöner,
+    # deshalb skalieren wir die Anzeige nicht weiter;
+    # für den Prototyp reicht das.
 
     screen.blit(
         player_text,
-        (10, 10)
+        player_rect
     )
 
-
-    # ------------------------------------------------
-    # Spielstatus
-    # ------------------------------------------------
-
-    current_game_state = game_state.get(
-        "game_state"
-    )
-
-    serving_player = game_state.get(
-        "serving_player"
-    )
-
-    ball_started = game_state.get(
-        "ball_started",
-        False
-    )
-
-
-    # ------------------------------------------------
-    # WAITING
-    # ------------------------------------------------
-
-    if current_game_state == "WAITING":
-
-        waiting_text = small_font.render(
-            "Warte auf zweiten Spieler...",
-            True,
-            WHITE
-        )
-
-        screen.blit(
-            waiting_text,
-            (
-                WIDTH // 2 - 160,
-                HEIGHT // 2 - 20
-            )
-        )
-
-
-    # ------------------------------------------------
-    # BALL WAITING FOR SERVE
-    # ------------------------------------------------
-
-    elif (
-        not ball_started
-        and serving_player == player_number
-    ):
-
-        start_text = small_font.render(
-            "SPACE = Ball starten",
-            True,
-            WHITE
-        )
-
-        screen.blit(
-            start_text,
-            (
-                WIDTH // 2 - 120,
-                HEIGHT - 40
-            )
-        )
-
-
-    # ------------------------------------------------
-    # WAITING FOR OTHER PLAYER
-    # ------------------------------------------------
-
-    elif not ball_started:
-
-        waiting_text = small_font.render(
-            f"Spieler {serving_player} "
-            f"ist am Aufschlag",
-            True,
-            WHITE
-        )
-
-        screen.blit(
-            waiting_text,
-            (
-                WIDTH // 2 - 140,
-                HEIGHT - 40
-            )
-        )
-
-
-    # ------------------------------------------------
-    # DISPLAY
-    # ------------------------------------------------
 
     pygame.display.flip()
 
-    clock.tick(FPS)
+
+    clock.tick(
+        60
+    )
 
 
 # --------------------------------------------------
-# Beenden
+# CLEANUP
 # --------------------------------------------------
 
-client.close()
+running = False
+
+try:
+
+    client.close()
+
+except:
+
+    pass
 
 pygame.quit()
